@@ -16,7 +16,7 @@ from sellbird.fit import company_fit, current_roles
 from sellbird.gate import do_not_contact_match
 
 COLUMNS = [
-    "company", "website", "sector", "area", "fit", "why_selected",
+    "company", "website", "phone", "sector", "area", "fit", "why_selected",
     "status", "why_not_contacted", "contacts", "contact_form", "hiring",
     "found_via", "first_found",
 ]
@@ -139,6 +139,7 @@ async def build_register(query_db, config, company_id: str | None = None) -> lis
             "fit_reasons": reasons,
             "company": c.get("name") or c.get("domain") or "",
             "website": c.get("website") or (f"https://{c['domain']}" if c.get("domain") else ""),
+            "phone": c.get("phone") or "",
             "sector": sector,
             "area": area,
             "fit": fit,

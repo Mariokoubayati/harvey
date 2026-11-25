@@ -96,7 +96,8 @@ async def test_register_keeps_companies_without_contacts_and_is_spreadsheet_safe
     config = SimpleNamespace(
         icp=SimpleNamespace(industries=["forging company"], titles=["Managing Director"], hiring_signals=[]),
         compliance=SimpleNamespace(do_not_contact=[]))
-    other = {**CO, "id": "c2", "name": "=HYPERLINK(\"x\")", "domain": "beta.example", "website": ""}
+    other = {**CO, "id": "c2", "name": "=HYPERLINK(\"x\")", "domain": "beta.example", "website": "",
+             "phone": "+1 555 0100"}
 
     async def query_db(sql, params=()):
         if "FROM companies" in sql:
@@ -110,6 +111,9 @@ async def test_register_keeps_companies_without_contacts_and_is_spreadsheet_safe
     assert rows[0]["why_selected"].startswith("Found via osm; sector: forging company")
     assert rows[1]["status"] == "Not processed yet" and rows[1]["website"] == "https://beta.example"
     assert "'=HYPERLINK" in to_csv(rows)
+    # The phone a listing came with, so a business with no email can still be called.
+    assert rows[1]["phone"] == "+1 555 0100" and rows[0]["phone"] == ""
+    assert to_csv(rows).splitlines()[0].startswith("company,website,phone,")
 
 
 def test_cli_writes_the_register(tmp_path, monkeypatch, capsys):

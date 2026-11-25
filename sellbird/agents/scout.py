@@ -95,6 +95,11 @@ LOCAL_BUSINESS_SOURCES = ("discover:osm", "discover:dataforseo_listings")
 # allowlist, not a blocklist: a personal address (jane.doe@) on a contact
 # page is a person Sellbird chose not to target, never "the team".
 INBOX_PAGES = ("/contact", "/contact-us")
+# Read only when those pages publish no usable address: a small site often
+# names its one inbox in its privacy policy or terms. Linked pages first;
+# these paths only when the homepage links to none.
+LEGAL_PAGES = ("/privacy-policy", "/privacy", "/terms")
+MAX_LEGAL_PAGES = 2
 INBOX_PREFERRED = ("owner", "office", "info", "contact", "contactus", "hello",
                    "team", "service", "sales", "estimates", "quotes",
                    "inquiries", "enquiries", "admin", "support")
@@ -1814,6 +1819,16 @@ Respond ONLY with the JSON array."""
                 if resp is not None:
                     pages.append((url, getattr(resp, "text", "") or ""))
 
+        candidates = await self._inbox_candidates(pages, domain, site)
+        if not candidates:
+            legal = await self._legal_pages(site)
+            candidates = await self._inbox_candidates(legal, domain, site)
+        if not candidates:
+            return ""
+        return min(candidates, key=lambda a: INBOX_PREFERRED.index(a.partition("@")[0]))
+
+    async def _inbox_candidates(self, pages, domain: str, site: dict) -> list[str]:
+        """The allowlisted general addresses on ``pages`` that are the business's own."""
         candidates = []
         for _, text in pages:
             for addr in people_mod.emails_on_page(text):
@@ -1825,9 +1840,28 @@ Respond ONLY with the JSON array."""
                         and not await self._is_own_domain(adomain, site):
                     continue
                 candidates.append(addr)
-        if not candidates:
-            return ""
-        return min(candidates, key=lambda a: INBOX_PREFERRED.index(a.partition("@")[0]))
+        return candidates
+
+    async def _legal_pages(self, site: dict) -> list[tuple[str, str]]:
+        """The privacy and terms pages, at most MAX_LEGAL_PAGES, inside the
+        company's request budget: the ones the homepage links to, else the
+        usual paths."""
+        home_url, home = site["pages"][0] if site["pages"] else (site["base"], "")
+        urls = people_mod.legal_links(home, home_url or site["base"], limit=MAX_LEGAL_PAGES)
+        if not urls:
+            urls = [f"{site['base']}{path}" for path in LEGAL_PAGES]
+        pages = []
+        for url in urls:
+            if len(pages) >= MAX_LEGAL_PAGES:
+                break
+            key = people_mod._norm_url(url)
+            if key in site["tried"]:
+                continue
+            site["tried"].add(key)
+            resp = await self._site_fetch(site, url)
+            if resp is not None:
+                pages.append((url, getattr(resp, "text", "") or ""))
+        return pages
 
     async def _is_own_domain(self, other: str, site: dict) -> bool:
         """Is ``other`` the business's own second domain? True when its
