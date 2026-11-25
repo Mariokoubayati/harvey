@@ -936,6 +936,40 @@ def menu_links(html: str, page_url: str, limit: int = 5) -> list[str]:
     return [url for *_, url in scored[:limit]]
 
 
+_LEGAL_LINK = re.compile(r"privacy|terms|legal|disclaimer|imprint|impressum|mentions-legales"
+                         r"|politique-de-confidentialite|conditions", re.I)
+
+
+def legal_links(html: str, page_url: str, limit: int = 2) -> list[str]:
+    """The site's own privacy and terms pages, linked from ``html``.
+
+    Small businesses that publish no address on their contact page often
+    name one in their privacy policy or terms ("questions: info@..."). Same
+    site only; privacy before terms."""
+    base = urlparse(page_url)
+    found: list[tuple[int, int, str]] = []
+    seen = {_norm_url(page_url)}
+    for i, m in enumerate(re.finditer(r'(?is)<a\b[^>]*?href\s*=\s*["\']([^"\'#][^"\']*)["\'][^>]*>(.*?)</a>',
+                                      _strip_code(html or ""))):
+        href = html_lib.unescape(m.group(1)).strip()
+        if href.lower().startswith(("mailto:", "tel:", "javascript:", "sms:")):
+            continue
+        url = urljoin(page_url, href).split("#")[0]
+        p = urlparse(url)
+        if p.scheme not in ("http", "https") or not _same_site(p.netloc, base.netloc):
+            continue
+        text = re.sub(r"(?s)<[^>]+>", " ", m.group(2))
+        if not (_LEGAL_LINK.search(unquote(p.path)) or _LEGAL_LINK.search(text)):
+            continue
+        key = _norm_url(url)
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append((0 if "privacy" in (p.path + text).lower() else 1, i, url))
+    found.sort()
+    return [url for *_, url in found[:limit]]
+
+
 # ── addresses on a page ──────────────────────────────────────────────────
 
 # Bounded on both sides and anchored at the start of a run, so a page of

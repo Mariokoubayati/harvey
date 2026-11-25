@@ -301,3 +301,49 @@ async def test_inbox_sequence_with_company_only_is_kept():
     out = await sequence_writer(steps)._write_sequence([inbox(industry="Roofing")])
     # Sellbird signs it with the persona's first name.
     assert [s.body for s in out] == ["Hi there, who answers at {{company}}?\n\nS"]
+
+
+# ── privacy and terms pages ──
+
+@pytest.mark.asyncio
+async def test_inbox_found_on_the_linked_privacy_page():
+    pages = {
+        "https://acme.com": '<a href="/privacy-notice">Privacy Policy</a> <a href="/tos">Terms</a>',
+        "https://acme.com/privacy-notice": "Questions about this policy: office@acme.com",
+    }
+    assert await make_scout(pages)._find_inbox_address("acme.com") == "office@acme.com"
+
+
+@pytest.mark.asyncio
+async def test_inbox_found_on_a_usual_terms_path_when_nothing_is_linked():
+    pages = {"https://acme.com": "Welcome", "https://acme.com/terms": "Contact info@acme.com"}
+    assert await make_scout(pages)._find_inbox_address("acme.com") == "info@acme.com"
+
+
+@pytest.mark.asyncio
+async def test_legal_pages_not_read_when_contact_page_has_an_inbox():
+    pages = {
+        "https://acme.com": '<a href="/privacy">Privacy</a>',
+        "https://acme.com/contact": "office@acme.com",
+        "https://acme.com/privacy": "info@acme.com",
+    }
+    scout = make_scout(pages)
+    assert await scout._find_inbox_address("acme.com") == "office@acme.com"
+    assert "acme.com/privacy" not in scout._site_reads["acme.com"]["tried"]
+
+
+@pytest.mark.asyncio
+async def test_legal_page_still_needs_an_own_domain_inbox():
+    pages = {
+        "https://acme.com": '<a href="/privacy">Privacy</a>',
+        "https://acme.com/privacy": "Site by webagency: info@webagency.com, privacy@acme.com",
+    }
+    assert await make_scout(pages)._find_inbox_address("acme.com") == ""
+
+
+def test_legal_links_same_site_privacy_first():
+    from sellbird.collectors.people import legal_links
+    html = ('<a href="/terms-of-service">Terms</a> <a href="https://other.com/privacy">x</a>'
+            '<a href="/legal/privacy">Privacy policy</a> <a href="/about">About</a>')
+    assert legal_links(html, "https://acme.com/") == [
+        "https://acme.com/legal/privacy", "https://acme.com/terms-of-service"]
