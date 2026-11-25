@@ -93,6 +93,21 @@ _NOT_ONLY_BUT_RE = re.compile(r"\bnot (?:only|just|merely) [^.?!\n]{1,60}?\bbut\
 _GREETING_RE = re.compile(r"^(?:hi|hey|hello|dear|good (?:morning|afternoon))\b[^\n]{0,40}$|^\w[\w .'-]{0,30},$",
                           re.IGNORECASE)
 _SELF_OPENING_RE = re.compile(r"^(?:i|we|i'm|we're|i've|we've|i'd|we'd|my|our)\b", re.IGNORECASE)
+# A subject that only names the offer or a generic topic ("your homepage",
+# "website idea"): it says nothing about the reader, so it reads as a template.
+_GENERIC_SUBJECT_RE = re.compile(
+    r"^(?:(?:your|a|the|quick|free|new)\s+)*"
+    r"(?:home\s?page|website|web\s?site|site|online presence|business|idea|ideas|question|"
+    r"mockup|mock\s?up|redesign|design|offer|proposal|opportunity|seo|marketing)"
+    r"(?:\s+(?:mockup|mock\s?up|idea|ideas|redesign|design|question|offer|review|audit|plan))*$",
+    re.IGNORECASE)
+# A first line that tells them what their own business does ("Acme provides
+# lawn care in Tampa."): they know, and it proves nobody looked.
+THEM = "\x00them\x00"
+_RESTATE_RE = re.compile(
+    re.escape(THEM) + r"\s+(?:provides?|offers?|is an?|are an?|specializ\w* in|"
+    r"has been|have been|serves?|helps?|does|focuses on|delivers?)\b",
+    re.IGNORECASE)
 
 _TIDY = str.maketrans({
     "‘": "'", "’": "'", "‚": "'", "‛": "'", "′": "'",
@@ -133,6 +148,17 @@ def _first_line(body: str) -> str:
             continue
         return line
     return ""
+
+
+def _restates_them(line: str, names) -> bool:
+    """Whether ``line`` opens by describing the reader's own business back
+    to them ("Acme provides lawn care", "You offer...")."""
+    marked = line or ""
+    for name in sorted((n for n in names or () if n and len(n.strip()) >= 3), key=len, reverse=True):
+        marked = re.sub(re.escape(name.strip()), THEM, marked, flags=re.IGNORECASE)
+    marked = re.sub(r"^(?:you|your (?:company|business|team))\b", THEM, marked.strip(),
+                    flags=re.IGNORECASE)
+    return bool(_RESTATE_RE.match(marked))
 
 
 def style_problems(subject: str, body: str, *, kind: str = "cold", step: int = 1,
@@ -182,6 +208,12 @@ def style_problems(subject: str, body: str, *, kind: str = "cold", step: int = 1
             reasons.append('opens with "I" or "we"; open with them, not you')
         if words(subject) > 6:
             reasons.append(f"subject is {words(subject)} words; keep it to 2-5")
+        if step == 1 and _GENERIC_SUBJECT_RE.match(tidy(subject).strip(" .?").lower()):
+            reasons.append(f'subject "{subject}" is generic; name the finding about them '
+                           '(their rank, what their site lacks), not your offer')
+        if step == 1 and _restates_them(_first_line(body), names):
+            reasons.append("first line tells them what their own business does; "
+                           "open with the specific thing you found instead")
     elif kind == "reply" and words(body) > REPLY_MAX_WORDS:
         reasons.append(f"is {words(body)} words; a reply must be {REPLY_MAX_WORDS} or fewer")
     return reasons

@@ -19,7 +19,12 @@ HOW A FIRST EMAIL WORKS. Each line leads to the next, so the ask feels obvious:
 1. Greeting: their first name ("Sam," or "Hi Sam,"), or "Hi there," for a company inbox.
 2. The finding: one specific thing from the FACTS that points to a problem you
    solve (where they rank, what their site lacks, a role they're hiring for).
-   Use their words and numbers. This is the personalization.
+   Use their words and numbers. This is the personalization. It is the first
+   line after the greeting. Never open by telling them what their own business
+   does ("Acme provides lawn care in Tampa"): they know, and it proves you
+   didn't look. If the FACTS hold nothing more specific than that, use the
+   most concrete thing they do show (a page their site lacks, a service with no
+   page of its own, how they take bookings), stated plainly.
 3. What it costs them, in one plain sentence (missed calls, patients choosing
    someone on page one, hours of manual work). Confident, never exaggerated.
 4. Who you are, only when the offer needs it: if the offer is your service (a
@@ -37,6 +42,10 @@ marks, no formatting or lists, one question only, plain words a busy person woul
 type. No "hope this finds you", "reaching out", "just wanted to", "worth a quick
 chat", "I'd love to", no hype words. No sign-off and no name at the end: Sellbird
 adds the sender's first name. Subject: lowercase, 2 to 5 words, no "quick question".
+The subject names the finding about them, the way a colleague would write it
+("sagebrush on page two", "brightwater after hours calls"). Never just your offer
+or a topic ("your homepage", "homepage mockup", "website idea"): that reads as a
+template and gets deleted unread.
 
 HONESTY. Every claim about them comes from the FACTS. Every claim about you comes
 from the product info above. Never invent a number, a customer, a mutual contact,

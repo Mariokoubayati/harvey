@@ -267,3 +267,24 @@ def test_training_suggests_offers_and_never_picks_or_replaces_yours():
     empty = merge_trained_config(learned, {"persona": {"company": "C", "email": "a@c.com"},
                                            "product": {"name": "P", "offer": {"entry": ""}}})
     assert empty["product"]["offer"]["entry"] == ""
+
+
+def test_generic_subject_on_email_one_is_flagged():
+    from sellbird.email_style import style_problems
+    body = "Hi Sam,\n\nAcme has no online booking, so every job starts with a phone call.\n\nWant a mockup?"
+    for subject in ("your homepage", "homepage mockup", "website idea", "quick question"):
+        assert any("generic" in r for r in style_problems(subject, body, names=("Acme", "Sam"))), subject
+    assert not any("generic" in r for r in style_problems("acme online booking", body, names=("Acme", "Sam")))
+    # Follow-ups may keep a plain subject.
+    assert not any("generic" in r for r in style_problems("your homepage", body, step=2, names=("Acme",)))
+
+
+def test_first_line_restating_their_business_is_flagged():
+    from sellbird.email_style import style_problems
+    names = ("Acme Lawn", "Sam")
+    bad = "Hi Sam,\n\nAcme Lawn provides lawn care in Tampa. Customers want more.\n\nWant a mockup?"
+    assert any("own business" in r for r in style_problems("acme booking", bad, names=names))
+    bad_you = "Hi Sam,\n\nYou offer lawn care in Tampa.\n\nWant a mockup?"
+    assert any("own business" in r for r in style_problems("acme booking", bad_you, names=names))
+    good = "Hi Sam,\n\nAcme Lawn has no online booking, so every quote is a phone call.\n\nWant a mockup?"
+    assert not any("own business" in r for r in style_problems("acme booking", good, names=names))
