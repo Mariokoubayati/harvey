@@ -15,7 +15,9 @@ import re
 from datetime import datetime, timezone
 
 from sellbird.brain import Brain
-from sellbird.config import EmailRulesError, SellbirdConfig, compliance_of, load_email_rules
+from sellbird.config import (EmailRulesError, SellbirdConfig, compliance_of, live_do_not_contact,
+                             load_email_rules)
+from sellbird.gate import do_not_contact_match
 from sellbird.email_style import (
     BREAKUP_MAX_WORDS, FIRST_EMAIL_MAX_WORDS, FOLLOW_UP_MAX_WORDS,
     style_problems, tidy, with_sign_off,
@@ -31,6 +33,11 @@ from sellbird.untrusted import UNTRUSTED_RULE, fence
 
 # A prospect with nothing to build a tip on (writer.require_tip) is parked here.
 NO_TIP_STATUS = "no_tip"
+# Parked rather than left "new" (which would make the heartbeat try to write
+# for them every cycle): someone at their company already has a first email.
+COLLEAGUE_STATUS = "colleague_contacted"
+# On the do-not-contact list: never drafted for, so never in the Outbox.
+DO_NOT_CONTACT_STATUS = "do_not_contact"
 
 logger = logging.getLogger("sellbird.writer")
 
@@ -264,6 +271,8 @@ class Writer:
             p for p in prospects_with_email
             if not await self.state.colleague_who_replied(p.id)
         ]
+        prospects_with_email = await self._drop_do_not_contact(prospects_with_email)
+        prospects_with_email = await self._one_per_company(prospects_with_email)
         if not prospects_with_email:
             logger.info(
                 "Writer: No prospects with deliverable (verified/risky) emails yet."
@@ -347,12 +356,19 @@ class Writer:
             # Mark prospects so they aren't picked up again
             for p in prospects:
                 await self.state.queue_prospect_if_unsent(p.id)
-                await self.state.delete_setting(WRITE_ATTEMPTS_KEY + p.id)
 
             # Native providers: replace the shared template for email 1 with
             # a per-prospect draft grounded in that company's actual facts.
+            undrafted = []
             if self.is_native:
-                await self._personalize_first_emails(campaign_id, prospects)
+                undrafted = await self._personalize_first_emails(campaign_id, prospects)
+                if undrafted:
+                    await self._take_out_of_campaign(campaign, campaign_id, undrafted, batch_name)
+            # A failed count is cleared only for those who got their email.
+            skipped = {p.id for p in undrafted}
+            for p in prospects:
+                if p.id not in skipped:
+                    await self.state.delete_setting(WRITE_ATTEMPTS_KEY + p.id)
 
             await self.state.log_action(
                 action_type="write_campaign",
@@ -368,6 +384,63 @@ class Writer:
                 f"Writer: Campaign '{batch_name}' created with "
                 f"{len(sequence)} emails for {len(prospects)} prospects."
             )
+
+    async def _take_out_of_campaign(self, campaign, campaign_id: str, undrafted: list,
+                                    batch_name: str) -> None:
+        """No personal first email means no email at all: the campaign's
+        shared template was written for the batch, not for them, and is the
+        generic email the writer's rules exist to prevent. They go back to
+        "new" for another try, and an unusable draft counts toward
+        write_failed, unless the model itself was unavailable."""
+        gone = {p.id for p in undrafted}
+        remaining = [pid for pid in campaign.prospect_ids if pid not in gone]
+        await self.state.update_campaign(
+            campaign_id, prospect_ids_json=json.dumps(remaining),
+            **({} if remaining else {"status": "cancelled"}))
+        for p in undrafted:
+            await self.state.update_prospect_status(p.id, "new")
+        if not getattr(self.brain, "paused_reason", ""):
+            await self._count_failed_attempt(batch_name, undrafted)
+        logger.info(f"Writer: {len(undrafted)} prospect(s) in '{batch_name}' got no personal "
+                    "first email; taken out of the campaign so the template never goes to them.")
+
+    async def _drop_do_not_contact(self, prospects: list) -> list:
+        """Leave out anyone on the do-not-contact list. The sender would
+        refuse them anyway, so a draft for them is a wasted model call and a
+        row in the Outbox that can never go."""
+        entries = live_do_not_contact(self.config)
+        if not entries:
+            return prospects
+        kept = []
+        for p in prospects:
+            if do_not_contact_match(p.email, entries):
+                await self.state.update_prospect_status(p.id, DO_NOT_CONTACT_STATUS)
+            else:
+                kept.append(p)
+        if len(kept) < len(prospects):
+            logger.info(f"Writer: Not writing for {len(prospects) - len(kept)} prospect(s) "
+                        f"on the do-not-contact list; marked {DO_NOT_CONTACT_STATUS}.")
+        return kept
+
+    async def _one_per_company(self, prospects: list) -> list:
+        """One first email per business: two near-identical cold emails to
+        the same company read as a mass mailing. The best-placed person is
+        kept (verified address first, then score); the rest, and anyone whose
+        colleague is already written to, are parked."""
+        ranked = sorted(prospects, key=lambda p: ((p.email_status or "") != "verified", -(p.score or 0)))
+        kept, seen = [], set()
+        for p in ranked:
+            key = p.company_id or (p.email or "").rpartition("@")[2].lower()
+            if key in seen or await self.state.colleague_in_outreach(p.id):
+                await self.state.update_prospect_status(p.id, COLLEAGUE_STATUS)
+                continue
+            seen.add(key)
+            kept.append(p)
+        if len(kept) < len(prospects):
+            logger.info(f"Writer: {len(prospects) - len(kept)} prospect(s) work at a company "
+                        f"that already gets a first email; marked {COLLEAGUE_STATUS}.")
+        order = {id(p): i for i, p in enumerate(prospects)}
+        return sorted(kept, key=lambda p: order[id(p)])
 
     def _min_write_score(self) -> int:
         """channels.email.min_write_score, or 0 when the config has none."""
@@ -442,8 +515,9 @@ class Writer:
 
         The outbox unique index means the sender's later template staging
         can't overwrite these rows — a personalized draft always wins the
-        (campaign, prospect, step 1) slot. If a draft fails, the slot stays
-        empty and the sender falls back to the campaign template.
+        (campaign, prospect, step 1) slot. Returns the prospects that got no
+        draft: the caller takes them out of the campaign, so the generic
+        template never goes to someone the writer chose not to write to.
         """
         await sync_sending_mode(self.config, self.state)
         require_approval = getattr(
@@ -470,6 +544,7 @@ class Writer:
         )
 
         drafted = 0
+        done: set[str] = set()
         for (prospect, _), draft in zip(pending, polished):
             draft = await self._keep_to_rules(draft, step=1, names=_names(prospect))
             if draft is None:
@@ -488,12 +563,14 @@ class Writer:
             )
             if item_id:
                 drafted += 1
+                done.add(prospect.id)
 
         if drafted:
             logger.info(
                 f"Writer: drafted {drafted} personalized first email(s) "
                 f"({'awaiting approval' if require_approval else 'approved'})."
             )
+        return [p for p in prospects if p.id not in done]
 
     async def _startup(self, company_id) -> list[str] | None:
         """Fact lines when the company is a startup (YC, another accelerator,
