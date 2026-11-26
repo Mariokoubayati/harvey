@@ -59,7 +59,7 @@ async def site_facts(state, company_id: str) -> list[str]:
     facts: list[str] = []
     # Where they rank: a fact only with the search that produced it, and only
     # when it's a problem (4th or lower). Top three is not something to pitch.
-    facts.extend(_rank_facts(latest))
+    facts.extend(await _rank_facts(lookup, company_id))
     # Problems the owner can see for themselves come first: they are what
     # makes a redesign mockup worth opening.
     if current.get("NOT_MOBILE_FRIENDLY") == 1:
@@ -136,28 +136,57 @@ def _review_facts(newest: dict) -> list[str]:
 MAX_PITCH_RANK = 30
 
 
-def _ordinal(n: int) -> str:
-    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
+RANK_CODES = ("SERP_RANK", "MAPS_RANK", "IN_LOCAL_PACK")
 
 
-def _rank_facts(latest: dict) -> list[str]:
-    """Google search and Maps positions worth naming, each with its phrase."""
+async def _best_ranks(lookup, company_id: str) -> dict[str, tuple[int, str]]:
+    """{code: (best position, its phrase)} over every fresh search.
+
+    A business is searched under several phrases ("tree trimming Atlanta",
+    "landscaping Atlanta"); the newest reading per phrase counts, and the
+    best of those is the one named. That is the search it is most known for,
+    so a landscaper is never told where it ranks for tree trimming when it
+    holds 2nd for landscaping."""
+    best: dict[str, tuple[int, str]] = {}
+    for code in RANK_CODES:
+        try:
+            rows = await lookup(company_id=company_id, signal_code=code, latest_only=False, limit=500)
+        except Exception:
+            continue
+        seen: set[str] = set()
+        for row in rows:                       # newest first
+            rank, phrase = _rank(row)
+            key = phrase.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if rank <= 0 or not phrase or not _fresh(row):
+                continue
+            if code not in best or rank < best[code][0]:
+                best[code] = (rank, phrase)
+    return best
+
+
+async def _rank_facts(lookup, company_id: str) -> list[str]:
+    """Google search and Maps positions worth naming, as bands, never an
+    exact place: a position moves with where and when the search is made,
+    and a number the owner can't reproduce reads as a made-up claim."""
+    best = await _best_ranks(lookup, company_id)
     facts = []
-    row = latest.get("SERP_RANK")
-    rank, phrase = _rank(row)
-    if rank and 4 <= rank <= MAX_PITCH_RANK and phrase:
-        page = (rank - 1) // 10 + 1
-        where = "below the top three" if page == 1 else f"on page {page}"
+    rank, phrase = best.get("SERP_RANK", (0, ""))
+    if 4 <= rank <= MAX_PITCH_RANK:
+        where = ("on page one but below the top three" if rank <= 10
+                 else "on page two" if rank <= 20 else "on page three")
         facts.append(
             f"  - Searching Google for \"{phrase}\" from the city centre, they came up "
-            f"{_ordinal(rank)}, {where} of the results, where few people click")
-    row = latest.get("MAPS_RANK")
-    rank, phrase = _rank(row)
-    if rank and rank >= 4 and phrase and not latest.get("IN_LOCAL_PACK"):
+            f"{where} of the results, where few people click")
+    rank, phrase = best.get("MAPS_RANK", (0, ""))
+    if rank >= 4 and "IN_LOCAL_PACK" not in best:
+        where = ("outside the top three" if rank <= 10
+                 else "outside the top ten" if rank <= 20 else "outside the top twenty")
         facts.append(
             f"  - On Google Maps for \"{phrase}\", searched from the city centre, they "
-            f"came up {_ordinal(rank)}; most people only look at the top three")
+            f"came up {where}; most people only look at the top three")
     return facts
 
 
