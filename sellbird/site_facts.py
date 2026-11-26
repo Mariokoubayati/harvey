@@ -20,10 +20,15 @@ already have is the worst first impression. It stays a signal for cohorts and
 the dashboard, where a human reads it as a lead to check, not as a claim.
 """
 
+from datetime import datetime, timedelta, timezone
+
 # A site nobody has changed for this long reads as neglected; a few weeks doesn't.
 STALE_DAYS = 180
 # Pages in sitemap.xml at or below this make a very small site.
 THIN_PAGES = 5
+# A finding read longer ago than this may no longer be true (the owner may
+# have updated the site since), so it isn't stated to them as current.
+FRESH_DAYS = 30
 
 HEADER = (
     "- Site checks (an automated read of their public pages; it can miss things). "
@@ -47,7 +52,7 @@ async def site_facts(state, company_id: str) -> list[str]:
         rows = await lookup(company_id=company_id, latest_only=True, limit=500)
     except Exception:
         return []
-    current = {r.get("signal_code"): r.get("value_num") for r in rows}
+    current = {r.get("signal_code"): r.get("value_num") for r in rows if _fresh(r)}
 
     facts: list[str] = []
     if current.get("NO_SCHEMA_MARKUP") == 1:
@@ -67,3 +72,19 @@ async def site_facts(state, company_id: str) -> list[str]:
             "  - Their robots.txt blocks AI crawlers, so AI search answers can't "
             "read their site")
     return [HEADER] + facts if facts else []
+
+
+def _fresh(row) -> bool:
+    """Was this observation made within FRESH_DAYS? One with no readable
+    date is kept: the age can't be judged, and dropping it changes nothing
+    that was true before."""
+    raw = str(row.get("observed_at") or "").strip()
+    if not raw:
+        return True
+    try:
+        seen = datetime.fromisoformat(raw.replace("Z", "+00:00").replace(" ", "T", 1))
+    except ValueError:
+        return True
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - seen <= timedelta(days=FRESH_DAYS)

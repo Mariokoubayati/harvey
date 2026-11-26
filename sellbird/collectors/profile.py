@@ -125,6 +125,8 @@ _CAREERS_ANCHOR = re.compile(r"^(careers?|jobs|join us|join (our|the) team|we['â
 # Roles recorded per company from a board. The first few say it; twenty rows
 # of "Account Executive, <city>" don't say more.
 MAX_BOARD_ROLES = 5
+# Child sitemaps read from a sitemap index, each one more request to the site.
+MAX_CHILD_SITEMAPS = 5
 CONTACT_PATHS = ("/contact", "/contact-us", "/get-a-quote", "/free-estimate",
                  "/request-estimate", "/quote")
 
@@ -875,6 +877,33 @@ class ProfileCollector:
         if self._client:
             await self._client.aclose()
 
+    async def _sitemap_pages(self, sm: str, site: str) -> tuple[int, str, bool]:
+        """(pages listed, all sitemap text read, whether the count is complete).
+
+        A sitemap index (WordPress, Yoast, Wix, Squarespace) lists other
+        sitemaps, not pages: counting its entries called a 157-page site a
+        two-page one. Its child sitemaps are read, up to MAX_CHILD_SITEMAPS;
+        with more, or any that won't load, the count is incomplete and is not
+        recorded at all, since a low number would be a false claim."""
+        if not re.search(r"(?i)<sitemapindex\b", sm):
+            return len(re.findall(r"(?i)<url\b", sm) or re.findall(r"<loc>", sm)), sm, True
+        children = [c.strip() for c in re.findall(r"<loc>\s*([^<]+?)\s*</loc>", sm)]
+        texts, complete = [sm], len(children) <= MAX_CHILD_SITEMAPS
+        pages = 0
+        host = urlparse(site).netloc.lower().removeprefix("www.")
+        for url in children[:MAX_CHILD_SITEMAPS]:
+            url = html_unescape(url)
+            if urlparse(url).netloc.lower().removeprefix("www.") != host:
+                complete = False      # never follow a sitemap off the site
+                continue
+            child = await self._get(url)
+            if not child or re.search(r"(?i)<sitemapindex\b", child):
+                complete = False
+                continue
+            texts.append(child)
+            pages += len(re.findall(r"(?i)<url\b", child))
+        return pages, "\n".join(texts), complete
+
     async def _get(self, url: str) -> str:
         try:
             resp = await self._client.get(url)
@@ -1256,9 +1285,9 @@ class ProfileCollector:
         if self.wants("SITE_PAGE_COUNT") or self.wants("BLOG_STALE"):
             sm = await self._get(f"{site}/sitemap.xml")
             if sm:
-                locs = re.findall(r"<loc>\s*([^<]+)\s*</loc>", sm)
-                if self.wants("SITE_PAGE_COUNT") and locs:
-                    add("SITE_PAGE_COUNT", num=len(locs), url=f"{site}/sitemap.xml")
+                pages, sm, complete = await self._sitemap_pages(sm, site)
+                if self.wants("SITE_PAGE_COUNT") and pages and complete:
+                    add("SITE_PAGE_COUNT", num=pages, url=f"{site}/sitemap.xml")
                 if self.wants("BLOG_STALE"):
                     dates = re.findall(r"<lastmod>\s*(\d{4}-\d{2}-\d{2})", sm)
                     if dates:
