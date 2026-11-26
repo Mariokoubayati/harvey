@@ -52,9 +52,37 @@ async def site_facts(state, company_id: str) -> list[str]:
         rows = await lookup(company_id=company_id, latest_only=True, limit=500)
     except Exception:
         return []
-    current = {r.get("signal_code"): r.get("value_num") for r in rows if _fresh(r)}
+    newest = {r.get("signal_code"): r for r in rows}
+    latest = {code: r for code, r in newest.items() if _fresh(r)}
+    current = {code: r.get("value_num") for code, r in latest.items()}
 
     facts: list[str] = []
+    # Where they rank: a fact only with the search that produced it, and only
+    # when it's a problem (4th or lower). Top three is not something to pitch.
+    facts.extend(_rank_facts(latest))
+    # Problems the owner can see for themselves come first: they are what
+    # makes a redesign mockup worth opening.
+    if current.get("NOT_MOBILE_FRIENDLY") == 1:
+        facts.append(
+            "  - Their homepage has no mobile viewport tag, so on a phone it shows "
+            "as a shrunken desktop page that visitors have to pinch and zoom")
+    if current.get("NO_HTTPS") == 1:
+        facts.append(
+            "  - Their site only loaded over plain http, so browsers show "
+            "\"Not secure\" next to their address")
+    year = current.get("OLD_COPYRIGHT")
+    if year:
+        facts.append(
+            f"  - The copyright line on their homepage still says {int(year)}, "
+            "which can make visitors wonder whether the business is still active")
+    if current.get("RUNNING_GOOGLE_ADS") == 1:
+        facts.append(
+            "  - Their homepage carries Google Ads conversion tracking, so they are "
+            "probably paying for Google Ads that send visitors to this site")
+    elif current.get("RUNNING_META_ADS") == 1:
+        facts.append(
+            "  - Their homepage carries the Meta ad pixel, so they probably run "
+            "Facebook or Instagram ads that send visitors to this site")
     if current.get("NO_SCHEMA_MARKUP") == 1:
         facts.append(
             "  - Their homepage has no JSON-LD structured data (schema.org markup), "
@@ -71,11 +99,80 @@ async def site_facts(state, company_id: str) -> list[str]:
         facts.append(
             "  - Their robots.txt blocks AI crawlers, so AI search answers can't "
             "read their site")
-    return [HEADER] + facts if facts else []
+    out = [HEADER] + facts if facts else []
+    listing = _review_facts(newest)
+    return out + [LISTING_HEADER] + listing if listing else out
 
 
-def _fresh(row) -> bool:
-    """Was this observation made within FRESH_DAYS? One with no readable
+LISTING_HEADER = (
+    "- From their Google listing. Use it to make the offer about them (what the "
+    "mockup would show), never as flattery or as the problem:"
+)
+# A good reputation worth putting on a homepage; a low one is never named.
+MIN_GOOD_RATING = 4.0
+MIN_REVIEWS = 5
+# Ratings move slowly, so a reading stays usable longer than a site check.
+REVIEW_FRESH_DAYS = 90
+
+
+def _review_facts(newest: dict) -> list[str]:
+    rating_row, count_row = newest.get("REVIEW_RATING"), newest.get("REVIEW_COUNT")
+    if not rating_row or not count_row:
+        return []
+    if not (_fresh(rating_row, REVIEW_FRESH_DAYS) and _fresh(count_row, REVIEW_FRESH_DAYS)):
+        return []
+    try:
+        rating = float(rating_row.get("value_num") or 0)
+        count = int(float(count_row.get("value_num") or 0))
+    except (TypeError, ValueError):
+        return []
+    if rating < MIN_GOOD_RATING or count < MIN_REVIEWS:
+        return []
+    return [f"  - They have a {rating:.1f}-star rating from about {count} Google reviews"]
+
+
+# Organic positions beyond this are "not found" territory: below it the
+# results are mostly directories, and the number says little.
+MAX_PITCH_RANK = 30
+
+
+def _ordinal(n: int) -> str:
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _rank_facts(latest: dict) -> list[str]:
+    """Google search and Maps positions worth naming, each with its phrase."""
+    facts = []
+    row = latest.get("SERP_RANK")
+    rank, phrase = _rank(row)
+    if rank and 4 <= rank <= MAX_PITCH_RANK and phrase:
+        page = (rank - 1) // 10 + 1
+        where = "below the top three" if page == 1 else f"on page {page}"
+        facts.append(
+            f"  - Searching Google for \"{phrase}\" from the city centre, they came up "
+            f"{_ordinal(rank)}, {where} of the results, where few people click")
+    row = latest.get("MAPS_RANK")
+    rank, phrase = _rank(row)
+    if rank and rank >= 4 and phrase and not latest.get("IN_LOCAL_PACK"):
+        facts.append(
+            f"  - On Google Maps for \"{phrase}\", searched from the city centre, they "
+            f"came up {_ordinal(rank)}; most people only look at the top three")
+    return facts
+
+
+def _rank(row) -> tuple[int, str]:
+    if not row:
+        return 0, ""
+    try:
+        rank = int(float(row.get("value_num") or 0))
+    except (TypeError, ValueError):
+        return 0, ""
+    return rank, str(row.get("value_text") or "").strip()
+
+
+def _fresh(row, days: int = FRESH_DAYS) -> bool:
+    """Was this observation made within ``days``? One with no readable
     date is kept: the age can't be judged, and dropping it changes nothing
     that was true before."""
     raw = str(row.get("observed_at") or "").strip()
@@ -87,4 +184,4 @@ def _fresh(row) -> bool:
         return True
     if seen.tzinfo is None:
         seen = seen.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - seen <= timedelta(days=FRESH_DAYS)
+    return datetime.now(timezone.utc) - seen <= timedelta(days=days)

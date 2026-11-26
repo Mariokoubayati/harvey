@@ -353,3 +353,45 @@ async def test_an_index_with_too_many_children_is_not_counted():
     pages = {k: _urlset(1) for k in kids}
     _, _, complete = await sitemap_collector(pages)._sitemap_pages(_index(*kids), "https://acme.example")
     assert not complete
+
+
+# ── website problems an owner recognises ──
+
+from datetime import date as _date
+
+from sellbird.collectors.profile import website_issues
+
+_TODAY = _date(2026, 11, 26)
+_GOOD = ('<html><head><meta name="viewport" content="width=device-width"></head><body>'
+         '<a href="tel:+15555550123">(555) 555-0123</a><footer>&copy; 2026 Acme Tree</footer></body></html>')
+
+
+def test_a_modern_homepage_has_no_issues():
+    assert website_issues("https://acme.example", _GOOD, _TODAY) == {
+        "NOT_MOBILE_FRIENDLY": 0, "NO_HTTPS": 0, "OLD_COPYRIGHT": 0}
+
+
+def test_an_old_homepage_shows_every_issue():
+    old = ("<html><body><p>Call 555-555-0123 today</p>"
+           "<footer>Copyright © 2015-2019 Acme Tree</footer></body></html>")
+    assert website_issues("http://acme.example", old, _TODAY) == {
+        "NOT_MOBILE_FRIENDLY": 1, "NO_HTTPS": 1, "OLD_COPYRIGHT": 2019}
+
+
+def test_last_year_is_not_old_yet():
+    html = _GOOD.replace("2026", "2025")
+    assert website_issues("https://acme.example", html, _TODAY)["OLD_COPYRIGHT"] == 0
+
+
+def test_what_cannot_be_judged_is_left_out():
+    # No copyright year: nothing to say either way.
+    issues = website_issues("https://acme.example",
+                            '<meta name="viewport" content="x"><p>Welcome</p>', _TODAY)
+    assert "OLD_COPYRIGHT" not in issues
+
+
+def test_years_and_numbers_in_scripts_do_not_count():
+    html = ('<meta name="viewport" content="x"><script>var c="© 2012";</script>'
+            "<footer>© 2026 Acme</footer>")
+    issues = website_issues("https://acme.example", html, _TODAY)
+    assert issues["OLD_COPYRIGHT"] == 0

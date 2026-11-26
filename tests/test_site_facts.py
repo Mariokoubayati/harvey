@@ -236,3 +236,97 @@ async def test_a_finding_older_than_a_month_is_not_passed_on(state):
     await state.add_observation(company_id=cid, signal_code="BLOG_STALE", collector="profile",
                                 value_num=400, observed_at=fresh)
     assert "400 days old" in "\n".join(await site_facts(state, cid))
+
+
+@pytest.mark.asyncio
+async def test_problems_an_owner_can_see_come_first(state):
+    cid = await company_with(state, NO_SCHEMA_MARKUP=1, NOT_MOBILE_FRIENDLY=1, NO_HTTPS=1,
+                             OLD_COPYRIGHT=2019)
+    facts = await site_facts(state, cid)
+    assert "shrunken desktop page" in facts[1]
+    assert any("Not secure" in f for f in facts)
+    assert any("still says 2019" in f for f in facts)
+    assert "JSON-LD" in facts[-1]
+
+
+@pytest.mark.asyncio
+async def test_a_site_without_those_problems_says_nothing_about_them(state):
+    cid = await company_with(state, NOT_MOBILE_FRIENDLY=0, NO_HTTPS=0, OLD_COPYRIGHT=0)
+    assert await site_facts(state, cid) == []
+
+
+
+# ── Google search and Maps positions ──
+
+
+async def ranked(state, **ranks):
+    """A company with {code: (rank, phrase)} observed."""
+    cid = await company_with(state)
+    for code, (rank, phrase) in ranks.items():
+        await state.add_observation(company_id=cid, signal_code=code, collector="discover",
+                                    value_num=rank, value_text=phrase)
+    return cid
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rank, shown, where", [
+    (3, False, ""), (4, True, "4th, below the top three"), (14, True, "14th, on page 2"),
+    (30, True, "30th, on page 3"), (31, False, "")])
+async def test_a_search_rank_is_named_only_when_it_is_a_problem(state, rank, shown, where):
+    cid = await ranked(state, SERP_RANK=(rank, "tree service dallas"))
+    text = "\n".join(await site_facts(state, cid))
+    assert bool(text) is shown
+    if shown:
+        assert '"tree service dallas" from the city centre' in text and where in text
+
+
+@pytest.mark.asyncio
+async def test_a_maps_rank_is_named_unless_they_hold_the_local_pack(state):
+    cid = await ranked(state, MAPS_RANK=(9, "landscaper austin"))
+    assert "came up 9th; most people only look at the top three" in "\n".join(await site_facts(state, cid))
+    held = await ranked(state, MAPS_RANK=(9, "landscaper austin"), IN_LOCAL_PACK=(2, "landscaper austin"))
+    assert await site_facts(state, held) == []
+
+
+@pytest.mark.asyncio
+async def test_a_rank_without_its_search_phrase_is_not_a_fact(state):
+    cid = await ranked(state, SERP_RANK=(14, ""))
+    assert await site_facts(state, cid) == []
+
+
+# ── Google reviews and ads ──
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rating, count, shown", [
+    (4.8, 120, True), (4.0, 5, True), (3.9, 200, False), (5.0, 4, False)])
+async def test_only_a_good_reputation_is_passed_on(state, rating, count, shown):
+    from sellbird.site_facts import LISTING_HEADER
+    cid = await company_with(state, REVIEW_RATING=rating, REVIEW_COUNT=count)
+    facts = await site_facts(state, cid)
+    assert bool(facts) is shown
+    if shown:
+        assert facts[0] == LISTING_HEADER
+        assert f"{rating:.1f}-star rating from about {count} Google reviews" in facts[1]
+
+
+@pytest.mark.asyncio
+async def test_reviews_stay_usable_for_three_months(state):
+    from datetime import datetime, timedelta, timezone
+    cid = await company_with(state)
+    when = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d %H:%M:%S")
+    for code, value in (("REVIEW_RATING", 4.7), ("REVIEW_COUNT", 40)):
+        await state.add_observation(company_id=cid, signal_code=code, collector="discover",
+                                    value_num=value, observed_at=when)
+    assert "4.7-star" in "\n".join(await site_facts(state, cid))
+
+
+@pytest.mark.asyncio
+async def test_ads_are_named_google_first(state):
+    cid = await company_with(state, RUNNING_GOOGLE_ADS=1, RUNNING_META_ADS=1)
+    text = "\n".join(await site_facts(state, cid))
+    assert "paying for Google Ads" in text and "Meta" not in text
+    meta = await state.add_company(Company(name="Birch", domain="birch.example"))
+    for code, value in (("RUNNING_GOOGLE_ADS", 0), ("RUNNING_META_ADS", 1)):
+        await state.add_observation(company_id=meta, signal_code=code, collector="profile", value_num=value)
+    assert "Facebook or Instagram ads" in "\n".join(await site_facts(state, meta))

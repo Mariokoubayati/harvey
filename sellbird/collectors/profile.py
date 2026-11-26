@@ -107,6 +107,14 @@ BOOKING_HINTS = (r"calendly\.com", r"acuityscheduling", r"schedulicity",
                  r"schedule[-_]?(an?[-_])?(appointment|estimate|consultation)",
                  r"housecallpro", r"getjobber\.com", r"servicetitan")
 
+# Website problems an owner recognises, read off the homepage HTML.
+_VIEWPORT = re.compile(r"(?is)<meta\b[^>]*name\s*=\s*[\"']?viewport")
+# "\u00a9 2015-2019", "Copyright 2019", "&copy; 2019": the year right after the mark.
+_COPYRIGHT_YEAR = re.compile(
+    r"(?i)(?:\u00a9|&copy;|&#169;|copyright)\s*(?:\(c\)\s*)?(?:(?:19|20)\d\d\s*[-\u2013\u2014]\s*)?((?:19|20)\d\d)\b")
+# How many years behind the newest copyright year must be to count as old.
+OLD_COPYRIGHT_YEARS = 2
+
 AI_CRAWLERS = ("gptbot", "google-extended", "ccbot", "anthropic-ai", "claudebot",
                "perplexitybot", "bytespider")
 
@@ -842,6 +850,26 @@ def _page_title(html: str) -> str:
     return html_unescape(re.sub(r"(?s)<[^>]+>", " ", " ".join(parts))).lower()
 
 
+def website_issues(site: str, home: str, today: date | None = None) -> dict[str, int]:
+    """Homepage problems a business owner recognises, as {signal: value}.
+
+    A check that can't tell is left out rather than recorded as a problem:
+    no copyright year found says nothing. Scripts and styles are stripped
+    first, so a year in tracking code never counts."""
+    text = _strip_code(home or "")
+    found: dict[str, int] = {
+        "NOT_MOBILE_FRIENDLY": 0 if _VIEWPORT.search(home or "") else 1,
+        "NO_HTTPS": 1 if (site or "").lower().startswith("http://") else 0,
+    }
+    years = [int(y) for y in _COPYRIGHT_YEAR.findall(html_unescape(text))]
+    this_year = (today or date.today()).year
+    years = [y for y in years if y <= this_year]
+    if years:
+        newest = max(years)
+        found["OLD_COPYRIGHT"] = newest if this_year - newest >= OLD_COPYRIGHT_YEARS else 0
+    return found
+
+
 class ProfileCollector:
     """Fetches a business's public pages and emits observations.
 
@@ -1200,6 +1228,10 @@ class ProfileCollector:
         has_schema = bool(re.search(r'application/ld\+json', home, re.I)
                           and re.search(r'"@type"', home))
         add("NO_SCHEMA_MARKUP", num=0 if has_schema else 1)
+
+        # Problems an owner recognises (see website_issues)
+        for code, value in website_issues(site, home).items():
+            add(code, num=value)
 
         # Booking gap
         add("NO_ONLINE_BOOKING", num=0 if self._any(home, BOOKING_HINTS) else 1)
