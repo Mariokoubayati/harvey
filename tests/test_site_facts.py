@@ -236,3 +236,21 @@ async def test_a_finding_older_than_a_month_is_not_passed_on(state):
     await state.add_observation(company_id=cid, signal_code="BLOG_STALE", collector="profile",
                                 value_num=400, observed_at=fresh)
     assert "400 days old" in "\n".join(await site_facts(state, cid))
+
+
+@pytest.mark.asyncio
+async def test_problems_an_owner_can_see_come_first(state):
+    cid = await company_with(state, NO_SCHEMA_MARKUP=1, NOT_MOBILE_FRIENDLY=1, NO_HTTPS=1,
+                             OLD_COPYRIGHT=2019, NO_TAP_TO_CALL=1)
+    facts = await site_facts(state, cid)
+    assert "shrunken desktop page" in facts[1]
+    assert any("Not secure" in f for f in facts)
+    assert any("still says 2019" in f for f in facts)
+    assert any("can't tap it to call" in f for f in facts)
+    assert "JSON-LD" in facts[-1]
+
+
+@pytest.mark.asyncio
+async def test_a_site_without_those_problems_says_nothing_about_them(state):
+    cid = await company_with(state, NOT_MOBILE_FRIENDLY=0, NO_HTTPS=0, OLD_COPYRIGHT=0, NO_TAP_TO_CALL=0)
+    assert await site_facts(state, cid) == []

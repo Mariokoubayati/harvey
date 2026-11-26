@@ -55,6 +55,25 @@ async def site_facts(state, company_id: str) -> list[str]:
     current = {r.get("signal_code"): r.get("value_num") for r in rows if _fresh(r)}
 
     facts: list[str] = []
+    # Problems the owner can see for themselves come first: they are what
+    # makes a redesign mockup worth opening.
+    if current.get("NOT_MOBILE_FRIENDLY") == 1:
+        facts.append(
+            "  - Their homepage has no mobile viewport tag, so on a phone it shows "
+            "as a shrunken desktop page that visitors have to pinch and zoom")
+    if current.get("NO_HTTPS") == 1:
+        facts.append(
+            "  - Their site only loaded over plain http, so browsers show "
+            "\"Not secure\" next to their address")
+    year = current.get("OLD_COPYRIGHT")
+    if year:
+        facts.append(
+            f"  - The copyright line on their homepage still says {int(year)}, "
+            "which can make visitors wonder whether the business is still active")
+    if current.get("NO_TAP_TO_CALL") == 1:
+        facts.append(
+            "  - Their homepage shows a phone number that isn't a link, so a "
+            "visitor on a phone can't tap it to call")
     if current.get("NO_SCHEMA_MARKUP") == 1:
         facts.append(
             "  - Their homepage has no JSON-LD structured data (schema.org markup), "

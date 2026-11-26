@@ -220,7 +220,7 @@ tool answers, such as a link, goes into the drafted reply. Without a handoff, th
 
 ### Step 4: Confirm Signals
 
-Sellbird ships a catalog of 29 signals it knows how to collect, all **proposed** and
+Sellbird ships a catalog of 33 signals it knows how to collect, all **proposed** and
 none active. Nothing is prospected against until the user confirms them.
 
 Send them to `sellbird dashboard` → Set up → **Signals**, where each one shows a
