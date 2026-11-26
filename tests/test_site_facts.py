@@ -270,22 +270,60 @@ async def ranked(state, **ranks):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rank, shown, where", [
-    (3, False, ""), (4, True, "4th, below the top three"), (14, True, "14th, on page 2"),
-    (30, True, "30th, on page 3"), (31, False, "")])
+    (3, False, ""), (4, True, "on page one but below the top three"), (14, True, "on page two"),
+    (30, True, "on page three"), (31, False, "")])
 async def test_a_search_rank_is_named_only_when_it_is_a_problem(state, rank, shown, where):
     cid = await ranked(state, SERP_RANK=(rank, "tree service dallas"))
     text = "\n".join(await site_facts(state, cid))
     assert bool(text) is shown
     if shown:
         assert '"tree service dallas" from the city centre' in text and where in text
+        assert str(rank) not in text            # a band, never the exact place
 
 
 @pytest.mark.asyncio
-async def test_a_maps_rank_is_named_unless_they_hold_the_local_pack(state):
-    cid = await ranked(state, MAPS_RANK=(9, "landscaper austin"))
-    assert "came up 9th; most people only look at the top three" in "\n".join(await site_facts(state, cid))
+@pytest.mark.parametrize("rank, where", [
+    (9, "outside the top three"), (15, "outside the top ten"), (99, "outside the top twenty")])
+async def test_a_maps_rank_is_named_as_a_band(state, rank, where):
+    cid = await ranked(state, MAPS_RANK=(rank, "landscaper austin"))
+    text = "\n".join(await site_facts(state, cid))
+    assert f"came up {where}; most people only look at the top three" in text
+    assert str(rank) not in text
+
+
+@pytest.mark.asyncio
+async def test_a_maps_rank_is_not_named_when_they_hold_the_local_pack(state):
     held = await ranked(state, MAPS_RANK=(9, "landscaper austin"), IN_LOCAL_PACK=(2, "landscaper austin"))
     assert await site_facts(state, held) == []
+
+
+@pytest.mark.asyncio
+async def test_their_best_search_is_the_one_named(state):
+    # Searched under two phrases: 2nd for their own trade, 11th for another.
+    cid = await company_with(state)
+    for rank, phrase, when in ((2, "landscaping atlanta", "2026-11-17 10:00:00"),
+                               (11, "tree trimming atlanta", "2026-11-17 11:00:00")):
+        await state.add_observation(company_id=cid, signal_code="MAPS_RANK", collector="discover",
+                                    value_num=rank, value_text=phrase, observed_at=_recent(when))
+    assert await site_facts(state, cid) == []           # 2nd is top three: nothing to pitch
+
+
+@pytest.mark.asyncio
+async def test_only_the_newest_reading_per_search_counts(state):
+    cid = await company_with(state)
+    for rank, when in ((2, "2026-11-10 10:00:00"), (15, "2026-11-17 10:00:00")):
+        await state.add_observation(company_id=cid, signal_code="MAPS_RANK", collector="discover",
+                                    value_num=rank, value_text="tree service tampa", observed_at=_recent(when))
+    assert "outside the top ten" in "\n".join(await site_facts(state, cid))
+
+
+def _recent(stamp: str) -> str:
+    """``stamp`` moved to the last few days, keeping the order of the
+    readings, so the 30-day cutoff never interferes."""
+    from datetime import datetime, timedelta, timezone
+    base = datetime(2026, 11, 17, tzinfo=timezone.utc)
+    seen = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - timedelta(days=1) - (base - seen)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 @pytest.mark.asyncio
