@@ -52,7 +52,8 @@ async def site_facts(state, company_id: str) -> list[str]:
         rows = await lookup(company_id=company_id, latest_only=True, limit=500)
     except Exception:
         return []
-    latest = {r.get("signal_code"): r for r in rows if _fresh(r)}
+    newest = {r.get("signal_code"): r for r in rows}
+    latest = {code: r for code, r in newest.items() if _fresh(r)}
     current = {code: r.get("value_num") for code, r in latest.items()}
 
     facts: list[str] = []
@@ -74,6 +75,14 @@ async def site_facts(state, company_id: str) -> list[str]:
         facts.append(
             f"  - The copyright line on their homepage still says {int(year)}, "
             "which can make visitors wonder whether the business is still active")
+    if current.get("RUNNING_GOOGLE_ADS") == 1:
+        facts.append(
+            "  - Their homepage carries Google Ads conversion tracking, so they are "
+            "probably paying for Google Ads that send visitors to this site")
+    elif current.get("RUNNING_META_ADS") == 1:
+        facts.append(
+            "  - Their homepage carries the Meta ad pixel, so they probably run "
+            "Facebook or Instagram ads that send visitors to this site")
     if current.get("NO_SCHEMA_MARKUP") == 1:
         facts.append(
             "  - Their homepage has no JSON-LD structured data (schema.org markup), "
@@ -90,7 +99,36 @@ async def site_facts(state, company_id: str) -> list[str]:
         facts.append(
             "  - Their robots.txt blocks AI crawlers, so AI search answers can't "
             "read their site")
-    return [HEADER] + facts if facts else []
+    out = [HEADER] + facts if facts else []
+    listing = _review_facts(newest)
+    return out + [LISTING_HEADER] + listing if listing else out
+
+
+LISTING_HEADER = (
+    "- From their Google listing. Use it to make the offer about them (what the "
+    "mockup would show), never as flattery or as the problem:"
+)
+# A good reputation worth putting on a homepage; a low one is never named.
+MIN_GOOD_RATING = 4.0
+MIN_REVIEWS = 5
+# Ratings move slowly, so a reading stays usable longer than a site check.
+REVIEW_FRESH_DAYS = 90
+
+
+def _review_facts(newest: dict) -> list[str]:
+    rating_row, count_row = newest.get("REVIEW_RATING"), newest.get("REVIEW_COUNT")
+    if not rating_row or not count_row:
+        return []
+    if not (_fresh(rating_row, REVIEW_FRESH_DAYS) and _fresh(count_row, REVIEW_FRESH_DAYS)):
+        return []
+    try:
+        rating = float(rating_row.get("value_num") or 0)
+        count = int(float(count_row.get("value_num") or 0))
+    except (TypeError, ValueError):
+        return []
+    if rating < MIN_GOOD_RATING or count < MIN_REVIEWS:
+        return []
+    return [f"  - They have a {rating:.1f}-star rating from about {count} Google reviews"]
 
 
 # Organic positions beyond this are "not found" territory: below it the
@@ -133,8 +171,8 @@ def _rank(row) -> tuple[int, str]:
     return rank, str(row.get("value_text") or "").strip()
 
 
-def _fresh(row) -> bool:
-    """Was this observation made within FRESH_DAYS? One with no readable
+def _fresh(row, days: int = FRESH_DAYS) -> bool:
+    """Was this observation made within ``days``? One with no readable
     date is kept: the age can't be judged, and dropping it changes nothing
     that was true before."""
     raw = str(row.get("observed_at") or "").strip()
@@ -146,4 +184,4 @@ def _fresh(row) -> bool:
         return True
     if seen.tzinfo is None:
         seen = seen.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - seen <= timedelta(days=FRESH_DAYS)
+    return datetime.now(timezone.utc) - seen <= timedelta(days=days)

@@ -292,3 +292,41 @@ async def test_a_maps_rank_is_named_unless_they_hold_the_local_pack(state):
 async def test_a_rank_without_its_search_phrase_is_not_a_fact(state):
     cid = await ranked(state, SERP_RANK=(14, ""))
     assert await site_facts(state, cid) == []
+
+
+# ── Google reviews and ads ──
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rating, count, shown", [
+    (4.8, 120, True), (4.0, 5, True), (3.9, 200, False), (5.0, 4, False)])
+async def test_only_a_good_reputation_is_passed_on(state, rating, count, shown):
+    from sellbird.site_facts import LISTING_HEADER
+    cid = await company_with(state, REVIEW_RATING=rating, REVIEW_COUNT=count)
+    facts = await site_facts(state, cid)
+    assert bool(facts) is shown
+    if shown:
+        assert facts[0] == LISTING_HEADER
+        assert f"{rating:.1f}-star rating from about {count} Google reviews" in facts[1]
+
+
+@pytest.mark.asyncio
+async def test_reviews_stay_usable_for_three_months(state):
+    from datetime import datetime, timedelta, timezone
+    cid = await company_with(state)
+    when = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d %H:%M:%S")
+    for code, value in (("REVIEW_RATING", 4.7), ("REVIEW_COUNT", 40)):
+        await state.add_observation(company_id=cid, signal_code=code, collector="discover",
+                                    value_num=value, observed_at=when)
+    assert "4.7-star" in "\n".join(await site_facts(state, cid))
+
+
+@pytest.mark.asyncio
+async def test_ads_are_named_google_first(state):
+    cid = await company_with(state, RUNNING_GOOGLE_ADS=1, RUNNING_META_ADS=1)
+    text = "\n".join(await site_facts(state, cid))
+    assert "paying for Google Ads" in text and "Meta" not in text
+    meta = await state.add_company(Company(name="Birch", domain="birch.example"))
+    for code, value in (("RUNNING_GOOGLE_ADS", 0), ("RUNNING_META_ADS", 1)):
+        await state.add_observation(company_id=meta, signal_code=code, collector="profile", value_num=value)
+    assert "Facebook or Instagram ads" in "\n".join(await site_facts(state, meta))
