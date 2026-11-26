@@ -289,3 +289,67 @@ async def test_profile_uses_homepage_brand_over_service_location_title(
         await c.run([{"id": cid, "name": current, "domain": domain}])
     assert (await state.get_company_by_domain(domain)).name == brand
     assert (await state.get_prospect(pid)).company == brand
+
+
+# ── sitemap size: an index lists sitemaps, not pages ──
+
+def _urlset(n, lastmod="2026-11-01"):
+    return "<urlset>" + "".join(
+        f"<url><loc>https://acme.example/p{i}</loc><lastmod>{lastmod}</lastmod></url>"
+        for i in range(n)) + "</urlset>"
+
+
+def _index(*children):
+    return "<sitemapindex>" + "".join(
+        f"<sitemap><loc>{c}</loc></sitemap>" for c in children) + "</sitemapindex>"
+
+
+def sitemap_collector(pages):
+    c = collector()
+
+    async def fake_get(url):
+        return pages.get(url, "")
+    c._get = fake_get
+    return c
+
+
+@pytest.mark.asyncio
+async def test_a_plain_sitemap_counts_its_pages():
+    count, _, complete = await sitemap_collector({})._sitemap_pages(_urlset(3), "https://acme.example")
+    assert (count, complete) == (3, True)
+
+
+@pytest.mark.asyncio
+async def test_a_sitemap_index_counts_the_pages_of_its_children():
+    pages = {"https://acme.example/post-sitemap.xml": _urlset(150, "2026-11-20"),
+             "https://acme.example/page-sitemap.xml": _urlset(7)}
+    count, text, complete = await sitemap_collector(pages)._sitemap_pages(
+        _index(*pages), "https://acme.example")
+    assert (count, complete) == (157, True)
+    assert "2026-11-20" in text          # freshness reads the children's dates too
+
+
+@pytest.mark.asyncio
+async def test_an_index_that_cannot_be_read_in_full_is_not_counted():
+    pages = {"https://acme.example/a.xml": _urlset(1)}
+    count, _, complete = await sitemap_collector(pages)._sitemap_pages(
+        _index("https://acme.example/a.xml", "https://acme.example/missing.xml"),
+        "https://acme.example")
+    assert not complete
+
+
+@pytest.mark.asyncio
+async def test_an_index_never_follows_a_sitemap_on_another_site():
+    pages = {"https://other.example/s.xml": _urlset(2)}
+    count, _, complete = await sitemap_collector(pages)._sitemap_pages(
+        _index("https://other.example/s.xml"), "https://acme.example")
+    assert count == 0 and not complete
+
+
+@pytest.mark.asyncio
+async def test_an_index_with_too_many_children_is_not_counted():
+    from sellbird.collectors.profile import MAX_CHILD_SITEMAPS
+    kids = [f"https://acme.example/s{i}.xml" for i in range(MAX_CHILD_SITEMAPS + 1)]
+    pages = {k: _urlset(1) for k in kids}
+    _, _, complete = await sitemap_collector(pages)._sitemap_pages(_index(*kids), "https://acme.example")
+    assert not complete

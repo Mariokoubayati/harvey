@@ -218,3 +218,21 @@ async def test_the_company_location_reaches_the_prompt(state):
     cid = await state.add_company(
         Company(name="Acme", domain="acme.example", location="Exampleville, Testland"))
     assert "- Location: Exampleville, Testland" in await prompt_for(state, cid)
+
+
+# ── an old reading isn't stated as current ──
+
+
+@pytest.mark.asyncio
+async def test_a_finding_older_than_a_month_is_not_passed_on(state):
+    from datetime import datetime, timedelta, timezone
+    from sellbird.site_facts import FRESH_DAYS
+    cid = await company_with(state)
+    old = (datetime.now(timezone.utc) - timedelta(days=FRESH_DAYS + 5)).strftime("%Y-%m-%d %H:%M:%S")
+    await state.add_observation(company_id=cid, signal_code="BLOG_STALE", collector="profile",
+                                value_num=400, observed_at=old)
+    assert await site_facts(state, cid) == []
+    fresh = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
+    await state.add_observation(company_id=cid, signal_code="BLOG_STALE", collector="profile",
+                                value_num=400, observed_at=fresh)
+    assert "400 days old" in "\n".join(await site_facts(state, cid))
