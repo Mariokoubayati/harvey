@@ -52,9 +52,13 @@ async def site_facts(state, company_id: str) -> list[str]:
         rows = await lookup(company_id=company_id, latest_only=True, limit=500)
     except Exception:
         return []
-    current = {r.get("signal_code"): r.get("value_num") for r in rows if _fresh(r)}
+    latest = {r.get("signal_code"): r for r in rows if _fresh(r)}
+    current = {code: r.get("value_num") for code, r in latest.items()}
 
     facts: list[str] = []
+    # Where they rank: a fact only with the search that produced it, and only
+    # when it's a problem (4th or lower). Top three is not something to pitch.
+    facts.extend(_rank_facts(latest))
     # Problems the owner can see for themselves come first: they are what
     # makes a redesign mockup worth opening.
     if current.get("NOT_MOBILE_FRIENDLY") == 1:
@@ -70,10 +74,6 @@ async def site_facts(state, company_id: str) -> list[str]:
         facts.append(
             f"  - The copyright line on their homepage still says {int(year)}, "
             "which can make visitors wonder whether the business is still active")
-    if current.get("NO_TAP_TO_CALL") == 1:
-        facts.append(
-            "  - Their homepage shows a phone number that isn't a link, so a "
-            "visitor on a phone can't tap it to call")
     if current.get("NO_SCHEMA_MARKUP") == 1:
         facts.append(
             "  - Their homepage has no JSON-LD structured data (schema.org markup), "
@@ -91,6 +91,46 @@ async def site_facts(state, company_id: str) -> list[str]:
             "  - Their robots.txt blocks AI crawlers, so AI search answers can't "
             "read their site")
     return [HEADER] + facts if facts else []
+
+
+# Organic positions beyond this are "not found" territory: below it the
+# results are mostly directories, and the number says little.
+MAX_PITCH_RANK = 30
+
+
+def _ordinal(n: int) -> str:
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _rank_facts(latest: dict) -> list[str]:
+    """Google search and Maps positions worth naming, each with its phrase."""
+    facts = []
+    row = latest.get("SERP_RANK")
+    rank, phrase = _rank(row)
+    if rank and 4 <= rank <= MAX_PITCH_RANK and phrase:
+        page = (rank - 1) // 10 + 1
+        where = "below the top three" if page == 1 else f"on page {page}"
+        facts.append(
+            f"  - Searching Google for \"{phrase}\" from the city centre, they came up "
+            f"{_ordinal(rank)}, {where} of the results, where few people click")
+    row = latest.get("MAPS_RANK")
+    rank, phrase = _rank(row)
+    if rank and rank >= 4 and phrase and not latest.get("IN_LOCAL_PACK"):
+        facts.append(
+            f"  - On Google Maps for \"{phrase}\", searched from the city centre, they "
+            f"came up {_ordinal(rank)}; most people only look at the top three")
+    return facts
+
+
+def _rank(row) -> tuple[int, str]:
+    if not row:
+        return 0, ""
+    try:
+        rank = int(float(row.get("value_num") or 0))
+    except (TypeError, ValueError):
+        return 0, ""
+    return rank, str(row.get("value_text") or "").strip()
 
 
 def _fresh(row) -> bool:

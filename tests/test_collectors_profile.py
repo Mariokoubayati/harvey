@@ -368,14 +368,14 @@ _GOOD = ('<html><head><meta name="viewport" content="width=device-width"></head>
 
 def test_a_modern_homepage_has_no_issues():
     assert website_issues("https://acme.example", _GOOD, _TODAY) == {
-        "NOT_MOBILE_FRIENDLY": 0, "NO_HTTPS": 0, "OLD_COPYRIGHT": 0, "NO_TAP_TO_CALL": 0}
+        "NOT_MOBILE_FRIENDLY": 0, "NO_HTTPS": 0, "OLD_COPYRIGHT": 0}
 
 
 def test_an_old_homepage_shows_every_issue():
     old = ("<html><body><p>Call 555-555-0123 today</p>"
            "<footer>Copyright © 2015-2019 Acme Tree</footer></body></html>")
     assert website_issues("http://acme.example", old, _TODAY) == {
-        "NOT_MOBILE_FRIENDLY": 1, "NO_HTTPS": 1, "OLD_COPYRIGHT": 2019, "NO_TAP_TO_CALL": 1}
+        "NOT_MOBILE_FRIENDLY": 1, "NO_HTTPS": 1, "OLD_COPYRIGHT": 2019}
 
 
 def test_last_year_is_not_old_yet():
@@ -384,14 +384,14 @@ def test_last_year_is_not_old_yet():
 
 
 def test_what_cannot_be_judged_is_left_out():
-    # No copyright year and no phone number: nothing to say either way.
+    # No copyright year: nothing to say either way.
     issues = website_issues("https://acme.example",
                             '<meta name="viewport" content="x"><p>Welcome</p>', _TODAY)
-    assert "OLD_COPYRIGHT" not in issues and "NO_TAP_TO_CALL" not in issues
+    assert "OLD_COPYRIGHT" not in issues
 
 
 def test_years_and_numbers_in_scripts_do_not_count():
-    html = ('<meta name="viewport" content="x"><script>var c="© 2012"; var p="555-555-0123";</script>'
+    html = ('<meta name="viewport" content="x"><script>var c="© 2012";</script>'
             "<footer>© 2026 Acme</footer>")
     issues = website_issues("https://acme.example", html, _TODAY)
-    assert issues["OLD_COPYRIGHT"] == 0 and "NO_TAP_TO_CALL" not in issues
+    assert issues["OLD_COPYRIGHT"] == 0

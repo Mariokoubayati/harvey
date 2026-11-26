@@ -222,16 +222,6 @@ SIGNAL_CATALOG: list[dict] = [
         "confidence_floor": 0.0,
     },
     {
-        "code": "NO_TAP_TO_CALL",
-        "label": "Phone number can't be tapped",
-        "description": "The homepage shows a phone number but never links it (no tel: link), so a visitor on a phone can't tap to call.",
-        "category": "profile",
-        "value_type": "bool",
-        "collector": "profile",
-        "cost_note": "free (homepage HTML)",
-        "confidence_floor": 0.0,
-    },
-    {
         "code": "NO_ONLINE_BOOKING",
         "label": "No online booking/scheduling",
         "description": "No booking or scheduling widget detected. Leads have to phone in, so after-hours demand is lost.",

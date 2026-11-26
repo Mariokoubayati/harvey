@@ -241,16 +241,54 @@ async def test_a_finding_older_than_a_month_is_not_passed_on(state):
 @pytest.mark.asyncio
 async def test_problems_an_owner_can_see_come_first(state):
     cid = await company_with(state, NO_SCHEMA_MARKUP=1, NOT_MOBILE_FRIENDLY=1, NO_HTTPS=1,
-                             OLD_COPYRIGHT=2019, NO_TAP_TO_CALL=1)
+                             OLD_COPYRIGHT=2019)
     facts = await site_facts(state, cid)
     assert "shrunken desktop page" in facts[1]
     assert any("Not secure" in f for f in facts)
     assert any("still says 2019" in f for f in facts)
-    assert any("can't tap it to call" in f for f in facts)
     assert "JSON-LD" in facts[-1]
 
 
 @pytest.mark.asyncio
 async def test_a_site_without_those_problems_says_nothing_about_them(state):
-    cid = await company_with(state, NOT_MOBILE_FRIENDLY=0, NO_HTTPS=0, OLD_COPYRIGHT=0, NO_TAP_TO_CALL=0)
+    cid = await company_with(state, NOT_MOBILE_FRIENDLY=0, NO_HTTPS=0, OLD_COPYRIGHT=0)
+    assert await site_facts(state, cid) == []
+
+
+
+# ── Google search and Maps positions ──
+
+
+async def ranked(state, **ranks):
+    """A company with {code: (rank, phrase)} observed."""
+    cid = await company_with(state)
+    for code, (rank, phrase) in ranks.items():
+        await state.add_observation(company_id=cid, signal_code=code, collector="discover",
+                                    value_num=rank, value_text=phrase)
+    return cid
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rank, shown, where", [
+    (3, False, ""), (4, True, "4th, below the top three"), (14, True, "14th, on page 2"),
+    (30, True, "30th, on page 3"), (31, False, "")])
+async def test_a_search_rank_is_named_only_when_it_is_a_problem(state, rank, shown, where):
+    cid = await ranked(state, SERP_RANK=(rank, "tree service dallas"))
+    text = "\n".join(await site_facts(state, cid))
+    assert bool(text) is shown
+    if shown:
+        assert '"tree service dallas" from the city centre' in text and where in text
+
+
+@pytest.mark.asyncio
+async def test_a_maps_rank_is_named_unless_they_hold_the_local_pack(state):
+    cid = await ranked(state, MAPS_RANK=(9, "landscaper austin"))
+    assert "came up 9th; most people only look at the top three" in "\n".join(await site_facts(state, cid))
+    held = await ranked(state, MAPS_RANK=(9, "landscaper austin"), IN_LOCAL_PACK=(2, "landscaper austin"))
+    assert await site_facts(state, held) == []
+
+
+@pytest.mark.asyncio
+async def test_a_rank_without_its_search_phrase_is_not_a_fact(state):
+    cid = await ranked(state, SERP_RANK=(14, ""))
     assert await site_facts(state, cid) == []

@@ -114,7 +114,6 @@ _COPYRIGHT_YEAR = re.compile(
     r"(?i)(?:\u00a9|&copy;|&#169;|copyright)\s*(?:\(c\)\s*)?(?:(?:19|20)\d\d\s*[-\u2013\u2014]\s*)?((?:19|20)\d\d)\b")
 # How many years behind the newest copyright year must be to count as old.
 OLD_COPYRIGHT_YEARS = 2
-_US_PHONE = re.compile(r"(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)")
 
 AI_CRAWLERS = ("gptbot", "google-extended", "ccbot", "anthropic-ai", "claudebot",
                "perplexitybot", "bytespider")
@@ -855,9 +854,8 @@ def website_issues(site: str, home: str, today: date | None = None) -> dict[str,
     """Homepage problems a business owner recognises, as {signal: value}.
 
     A check that can't tell is left out rather than recorded as a problem:
-    no copyright year found says nothing, nor does a page with no phone
-    number. Scripts and styles are stripped first, so a number or year in
-    tracking code never counts."""
+    no copyright year found says nothing. Scripts and styles are stripped
+    first, so a year in tracking code never counts."""
     text = _strip_code(home or "")
     found: dict[str, int] = {
         "NOT_MOBILE_FRIENDLY": 0 if _VIEWPORT.search(home or "") else 1,
@@ -869,9 +867,6 @@ def website_issues(site: str, home: str, today: date | None = None) -> dict[str,
     if years:
         newest = max(years)
         found["OLD_COPYRIGHT"] = newest if this_year - newest >= OLD_COPYRIGHT_YEARS else 0
-    visible = re.sub(r"(?s)<[^>]+>", " ", text)
-    if _US_PHONE.search(visible):
-        found["NO_TAP_TO_CALL"] = 0 if re.search(r"(?i)href\s*=\s*[\"']?\s*tel:", home or "") else 1
     return found
 
 
