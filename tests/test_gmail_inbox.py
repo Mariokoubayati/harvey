@@ -200,3 +200,62 @@ async def test_a_garbled_token_answer_is_no_token_not_a_crash(monkeypatch, expir
     assert token in (None, 't')
     if expires_in is None:
         assert token == 't'
+
+
+# ── Gmail's "slow down" is waited out, not treated as a failed read ──
+
+
+def _replaying(monkeypatch, answers):
+    """A provider whose HTTP calls get ``answers`` in turn (status, text)."""
+    import httpx
+    import sellbird.integrations.gmail as gmail
+    calls = []
+
+    def handler(request):
+        status, text = answers[min(len(calls), len(answers) - 1)]
+        calls.append(request)
+        return httpx.Response(status, text=text)
+
+    client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(gmail.httpx, 'AsyncClient', lambda **kwargs: client(transport=transport, **kwargs))
+    waits = []
+
+    async def no_wait(seconds):
+        waits.append(seconds)
+    monkeypatch.setattr(gmail, '_sleep', no_wait)
+    p = GmailProvider(SimpleNamespace(), SimpleNamespace())
+    p._token = AsyncMock(return_value='synthetic-token')
+    return p, calls, waits
+
+
+QUOTA = '{"error": {"code": 403, "message": "Quota exceeded for quota metric \'Total Query Cost\'", "status": "RESOURCE_EXHAUSTED"}}'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('limited', [(403, QUOTA), (429, '{}')])
+async def test_a_rate_limit_is_waited_out_and_the_read_retried(monkeypatch, limited):
+    p, calls, waits = _replaying(monkeypatch, [limited, limited, (200, '{"historyId": "7"}')])
+    assert await p._request('GET', '/profile') == {'historyId': '7'}
+    assert len(calls) == 3 and waits == [5, 20]
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limit_that_never_clears_still_fails_the_read(monkeypatch):
+    p, calls, waits = _replaying(monkeypatch, [(429, '{}')])
+    assert await p._request('GET', '/profile') is None
+    assert len(calls) == 4 and waits == [5, 20, 40]
+
+
+@pytest.mark.asyncio
+async def test_a_403_that_is_not_a_rate_limit_is_not_retried(monkeypatch):
+    p, calls, waits = _replaying(monkeypatch, [(403, '{"error": {"message": "Insufficient Permission"}}')])
+    assert await p._request('GET', '/profile') is None
+    assert len(calls) == 1 and waits == []
+
+
+@pytest.mark.asyncio
+async def test_a_send_is_never_repeated(monkeypatch):
+    p, calls, waits = _replaying(monkeypatch, [(429, '{}')])
+    assert await p._request('POST', '/messages/send', sending=True, json={}) is None
+    assert len(calls) == 1 and waits == []

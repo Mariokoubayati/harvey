@@ -14,6 +14,7 @@ Google Postmaster Tools. Sellbird's outbox pacing + kill switches handle the
 rest.
 """
 
+import asyncio
 import base64
 import codecs
 import json
@@ -52,6 +53,26 @@ LOOPBACK_PORT = 8765
 MAX_INBOX_PAGES = 40
 # A full 7-day read runs at least this often, whatever the history says.
 FULL_READ_EVERY_SECONDS = 24 * 3600
+# Gmail's per-user limits are counted per minute, so a "slow down" answer
+# clears within a minute: wait and ask again (reads only; a send is never
+# repeated). Seconds before each retry.
+RATE_LIMIT_WAITS = (5, 20, 40)
+_RATE_LIMIT_WORDS = ("ratelimitexceeded", "userratelimitexceeded", "quota exceeded",
+                     "rate_limit_exceeded", "too many requests")
+_sleep = asyncio.sleep          # the tests replace it
+
+
+def _rate_limited(resp) -> bool:
+    """Is this Gmail's "slow down", not a real refusal? 429 always; 403 only
+    when Google says it's a rate or quota limit (a 403 is also "no access")."""
+    if resp.status_code == 429:
+        return True
+    if resp.status_code != 403:
+        return False
+    text = (resp.text or "")[:2000].lower()
+    return any(word in text for word in _RATE_LIMIT_WORDS)
+
+
 # Labels that mean "not a reply to handle".
 _NOT_REPLIES = frozenset({"SENT", "DRAFT", "SPAM", "TRASH"})
 # Codecs Python accepts that are no real mail charset (see _extract_text).
@@ -202,17 +223,25 @@ class GmailProvider(MailProvider):
         if not token:
             return None
         headers = {"Authorization": f"Bearer {token}"}
-        try:
-            async with self._client() as client:
-                resp = await client.request(
-                    method, f"{API_BASE}{path}", headers=headers, **kwargs
-                )
-        except httpx.HTTPError as e:
-            logger.error(f"Gmail request failed ({path}): {e}")
-            if sending:
-                # The request may have reached Gmail before the connection failed.
-                raise RuntimeError("Gmail send outcome is unknown") from e
-            return None
+        waits = () if sending else RATE_LIMIT_WAITS
+        for attempt in range(len(waits) + 1):
+            try:
+                async with self._client() as client:
+                    resp = await client.request(
+                        method, f"{API_BASE}{path}", headers=headers, **kwargs
+                    )
+            except httpx.HTTPError as e:
+                logger.error(f"Gmail request failed ({path}): {e}")
+                if sending:
+                    # The request may have reached Gmail before the connection failed.
+                    raise RuntimeError("Gmail send outcome is unknown") from e
+                return None
+            if attempt < len(waits) and _rate_limited(resp):
+                logger.warning(f"Gmail asked Sellbird to slow down ({resp.status_code}); "
+                               f"waiting {waits[attempt]}s before reading again.")
+                await _sleep(waits[attempt])
+                continue
+            break
         if sending and not (200 <= resp.status_code < 300
                             or 400 <= resp.status_code < 500):
             raise RuntimeError("Gmail send outcome is unknown")
