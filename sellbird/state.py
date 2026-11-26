@@ -83,6 +83,13 @@ def _email_domain(alias: str) -> str:
     return f"lower(substr({alias}.email, instr({alias}.email, '@') + 1))"
 
 
+# Statuses that mean someone at a company is already in a conversation with
+# Sellbird, or has been written to: a colleague gets no first email of their own.
+_IN_OUTREACH = ", ".join(f"'{s}'" for s in (
+    "queued", "contacted", "replied", "interested", "meeting", "closed",
+    "not_interested", "opted_out"))
+
+
 def _colleagues(p: str, c: str) -> str:
     """SQL: prospect ``c`` works with prospect ``p``. The same company; or,
     when either has no company, the same email domain, never a shared one
@@ -2403,6 +2410,18 @@ class StateManager:
             await db.commit()
             return cursor.rowcount > 0
 
+
+    async def colleague_in_outreach(self, prospect_id: str) -> bool:
+        """Is someone else at this prospect's company already being written
+        to, emailed, or out of reach (replied, booked, opted out)? Then a
+        second cold first email to the same business is a duplicate."""
+        async with self._connect() as db:
+            async with db.execute(
+                "SELECT 1 FROM prospects p, prospects c WHERE p.id = ? "
+                f"AND {_colleagues('p', 'c')} AND c.status IN ({_IN_OUTREACH}) LIMIT 1",
+                (prospect_id,),
+            ) as cursor:
+                return await cursor.fetchone() is not None
 
     async def colleague_who_replied(self, prospect_id: str) -> str | None:
         """The name of someone at this prospect's company who has replied,
